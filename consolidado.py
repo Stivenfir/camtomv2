@@ -53,6 +53,13 @@ def validate_integralaia_on_startup():
     if not valid_config:
         raise RuntimeError(validation_message)
 
+
+@app.on_event("startup")
+def validate_integralaia_on_startup():
+    valid_config, validation_message = validate_integralaia_settings()
+    if not valid_config:
+        raise RuntimeError(validation_message)
+
 # obtener_clasificacion_arancelaria("carro automatico motor 1.6 de color rojo")
 
 CONEXION_FALLIDA = "No se pudo establecer conexión con la base de datos."
