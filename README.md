@@ -1,47 +1,36 @@
-## API limpia para procesamiento de facturas (Integralaia)
+## Ejecucion del servidor:
+    python -m uvicorn consolidado:app --host 0.0.0.0 --port 8000
 
-### Qué quedó en el repositorio
-Solo se dejaron los archivos necesarios para el flujo de API y procesamiento:
-- `consolidado.py` (FastAPI + flujo de procesamiento y tracking TK en SQL Server)
-- `extractgeneral.py` (OCR de factura usando Integralaia)
-- `integralaia_provider.py` (cliente del proveedor Integralaia)
-- `snippedtexto.py`, `jsonaxlsx.py`, `xlsxprocesotiempos.py` (módulos auxiliares del flujo existente)
-- `requirements.txt`
 
-Se creó carpeta de entrada para pruebas manuales:
-- `facturas_entrada/`
+-----------------------------------------------------------------------
 
----
 
-## Variables de entorno Integralaia
-Configura antes de levantar la API:
+    curl -X GET "https://apps.abcrepecev.com:1901/API-ABC/procesarfactura.php?id=xxxxxx
 
-- `INTEGRALAIA_BASE_URL` (ej: `https://dev-visado-api-abcrepecev.integralaia.com`)
-- `INTEGRALAIA_API_KEY`
-- `INTEGRALAIA_DOCUMENT_TYPE_CODE` (default: `FACTURACOMERCIAL`)
+## Descripcion general
+Este endpoint inicia el procesamiento de una o varias facturas asociadas a un identificador DocImpoID. 
+El procesamiento se realiza en segundo plano utilizando el sistema de tareas BackgroundTasks de FastAPI, 
+permitiendo que el cliente reciba una respuesta inmediata mientras el sistema continúa trabajando de forma asíncrona.
 
----
 
-## Ejecución
-```bash
-python -m uvicorn consolidado:app --host 0.0.0.0 --port 8000
-```
+------------------------------------------------------------------------
 
----
 
-## Endpoints principales
-- `GET /procesarfactura/{docimpoid}`
-- `GET /procesoclasificacion/{docimpoid}`
-- `POST /procesoexcel`
+    curl -X GET "https://apps.abcrepecev.com:1901/API-ABC/procesoclasificacion.php?id=xxxxxx
 
-El flujo de `/procesarfactura/{docimpoid}` mantiene la lógica de tracking TK y tablas SQL existentes.
+## Descripcion general
+Este endpoint inicia un proceso automatizado de clasificación arancelaria de ítems relacionados a un documento de importación identificado por DocImpoID.
+El proceso se ejecuta en segundo plano, 
+permitiendo una respuesta inmediata mientras se realiza la actualización en base de datos con la clasificación sugerida por un modelo o proceso.
 
----
 
-## Prueba recomendada
-1. Subir una factura PDF en la ruta/carpeta que ya consume tu proceso en SQL (o usar `facturas_entrada/` como carpeta de staging manual).
-2. Asegurar que el registro esté creado en `IA_IM_ProcesarFacturasIA` para el `docimpoid`.
-3. Disparar:
-```bash
-curl -X GET "http://localhost:8000/procesarfactura/{docimpoid}"
-```
+------------------------------------------------------------------------
+
+
+    curl -X POST "https://apps.abcrepecev.com:1901/API-ABC/procesoexcel.php" -H "Content-Type: application/x-www-form-urlencoded" -d "ruta=xxxxxx.xlsx&idmaestro=xxxxxx
+
+## Descripcion general
+Este endpoint recibe una ruta de archivo Excel y un id de maestro (idmaestro) para:
+- Leer el archivo Excel.
+- Procesar los datos en segundo plano (background).
+- Clasificar productos y actualizar la base de datos con esa información.

@@ -7,8 +7,8 @@ from openpyxl import load_workbook
 from openpyxl.utils.exceptions import SheetTitleException
 
 # Configura tu conexión
-server = "172.16.10.77\\DBABC21"
-database = "Repecev2005"
+server = "172.16.10.54\\DBABC21"
+database = "Repecev2005_H"
 username = "Repecev2005"
 password = ""
 
@@ -365,7 +365,7 @@ El documento es una Factura Comercial Internacional de comercio exterior. Contie
 2. TABLA DE PRODUCTOS: Si existe una columna 'Orden Compra', 'OC', 'PO' en la tabla de productos, los valores de esa columna (ej: 'ODC 106725', 'ODC 105850') van en el campo 'order_position' de cada item. NO confundir con 'reference' que es para SKU/código de producto.
 """,
             "json_response": {
-               "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "http://json-schema.org/draft-07/schema#",
     "title": "Factura",
     "type": "object",
     "properties": {
@@ -538,7 +538,7 @@ El documento es una Factura Comercial Internacional de comercio exterior. Contie
                     "type": "string",
                     "nullable": True,
                     "description": "Dirección final del destinatario o entrega. E.g. 789 Delivery Blvd, Monterrey, Mexico.. Deberá ser null si no se encuentra explicitamente en el documento.",
-                    
+                    "pattern": "^[A-Z0-9_-]+$",
                     "minLength": 1,
                     "maxLength": 100,
                     "example": "789 Delivery Blvd, Monterrey, Mexico",
@@ -605,7 +605,7 @@ El documento es una Factura Comercial Internacional de comercio exterior. Contie
                     },
                     "brand": {
                         "type": "string",
-                        "description": "Marca del item.\n Reglas estrictas:\n1) Si existe una columna específica para marca (i.e. Marca, Mark, Brand o algún término similar), usarla.\n2) Si no, analizar la descripción. Extraerla SOLO si es el viene la marca de forma explícita (precedida de 'Brand:', 'Mark', o algún término similar). REGLA DE EXCLUSIÓN: Si la descripción comienza con el nombre de una línea de producto, familia, modelo, tecnología o un nombre comercial compuesto (especialmente aquellos con guiones o números), NO extraerlo y dejar el campo vacío. Ejemplos genéricos de lo que NO se debe extraer: 'Galaxy' (Línea), 'Mustang' (Modelo), 'PlayStation' (Sub-marca), 'Wi-Fi' (Tecnología), 'Power-Shot' (Nombre compuesto).\n3) ANTI-ALUCINACIÓN: Si la marca no está escrita explícitamente en la línea del ítem, dejar vacío. No rellenar basándose en logotipos del encabezado o conocimiento externo.",
+                        "description": "Marca del producto. E.g. Dell. Deberá ser null si no se encuentra explicitamente en el documento.",
                         "minLength": 0,
                         "maxLength": 1000,
                         "example": "Dell",
@@ -623,7 +623,7 @@ El documento es una Factura Comercial Internacional de comercio exterior. Contie
                         "example": 2023,
                     },
                     "quantity": {
-                        "type": "integer",
+                        "type": "number",
                         "description": "Cantidad de unidades del producto o servicio facturado.",
                         "minimum": 0,
                         "example": 3,
@@ -674,11 +674,16 @@ El documento es una Factura Comercial Internacional de comercio exterior. Contie
                     },
                 },
                             "required": [
-                                "description",
-                                "quantity",
-                                "unitPrice",
-                                "subTotal",
-                                "amount",
+                                "order_position",
+                    "reference",
+                    "origin_country",
+                    "description",
+                    "quantity",
+                    "unitPrice",
+                    "subTotal",
+                    "totalweight_kg",
+                    "totalnetweight_kg",
+                    "amount",
                             ],
                         },
                         "minItems": 1,
