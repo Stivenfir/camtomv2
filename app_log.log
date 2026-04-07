@@ -1,8 +1,0 @@
-2025-01-16 16:39:37,402 - INFO - Iniciando el proceso para extraer datos de la factura: C:\CAMTOM\FEVP730423.pdf
-2025-01-16 16:39:37,402 - INFO - Iniciando extracción de PDF.
-2025-01-16 16:39:39,642 - ERROR - Error en la respuesta: 400
-2025-01-16 16:39:39,642 - ERROR - Error en el proceso principal: 'str' object has no attribute 'iterrows'
-2025-01-16 16:40:39,423 - INFO - Iniciando el proceso para extraer datos de la factura: C:\CAMTOM\FEVP730423.pdf
-2025-01-16 16:40:39,424 - INFO - Iniciando extracción de PDF.
-2025-01-16 16:40:42,029 - ERROR - Error en la respuesta: 400 - {"error":"HTTPException","message":"Unexpected error occurred. If this persists, please contact founders@camtomx.com","status_code":400}
-2025-01-16 16:40:42,029 - ERROR - Error en el proceso principal: 'str' object has no attribute 'iterrows'
