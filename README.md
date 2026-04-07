@@ -14,6 +14,9 @@ Opcionales:
 - `INTEGRALAIA_TIMEOUT` (default `60`)
 - `INTEGRALAIA_EXTRACTION_TIMEOUT` (default `180`)
 
+El servicio intenta cargar automáticamente `./.env` al iniciar.  
+También puedes iniciar con: `python -m uvicorn consolidado:app --env-file .env --host 0.0.0.0 --port 8000`
+
 
 -----------------------------------------------------------------------
 

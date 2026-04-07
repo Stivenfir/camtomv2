@@ -358,6 +358,7 @@ def _map_tipodoc_to_document_type_code(tipodoc) -> str:
 
 
 def validate_integralaia_settings() -> tuple[bool, str]:
+    load_local_env_file()
     missing = [
         key
         for key in ("INTEGRALAIA_BASE_URL", "INTEGRALAIA_API_KEY")
@@ -366,6 +367,20 @@ def validate_integralaia_settings() -> tuple[bool, str]:
     if missing:
         return False, f"Faltan variables de entorno requeridas para Integralaia: {', '.join(missing)}"
     return True, ""
+
+
+def load_local_env_file() -> None:
+    env_path = Path(__file__).resolve().parent / ".env"
+    if not env_path.exists():
+        return
+
+    with env_path.open("r", encoding="utf-8") as env_file:
+        for raw_line in env_file:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
 def ocr_factura(file_path, tipodoc):
