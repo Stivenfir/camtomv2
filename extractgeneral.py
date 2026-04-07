@@ -1,10 +1,14 @@
 import requests
 import os
 import json
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 import pandas as pd
 import pyodbc
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import SheetTitleException
+from integralaia_provider import IntegralaiaProvider, ExtractionSchemaNotConfigured
 
 # Configura tu conexión
 server = "172.16.10.77\\DBABC21"
@@ -332,6 +336,53 @@ def t(tipo, nullable=False, **kwargs):
     return d
 
 
+@dataclass
+class SimpleResponse:
+    status_code: int
+    payload: dict
+
+    @property
+    def text(self) -> str:
+        return json.dumps(self.payload, ensure_ascii=False)
+
+    def json(self):
+        return self.payload
+
+
+def _map_tipodoc_to_document_type_code(tipodoc) -> str:
+    mapping = {
+        "47": "FACTURACOMERCIAL",
+        "210": "FACTURACOMERCIAL",
+    }
+    return mapping.get(str(tipodoc), "FACTURACOMERCIAL")
+
+
+def validate_integralaia_settings() -> tuple[bool, str]:
+    load_local_env_file()
+    missing = [
+        key
+        for key in ("INTEGRALAIA_BASE_URL", "INTEGRALAIA_API_KEY")
+        if not os.getenv(key)
+    ]
+    if missing:
+        return False, f"Faltan variables de entorno requeridas para Integralaia: {', '.join(missing)}"
+    return True, ""
+
+
+def load_local_env_file() -> None:
+    env_path = Path(__file__).resolve().parent / ".env"
+    if not env_path.exists():
+        return
+
+    with env_path.open("r", encoding="utf-8") as env_file:
+        for raw_line in env_file:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
 def ocr_factura(file_path, tipodoc):
 
     if tipodoc == "210":
@@ -339,14 +390,8 @@ def ocr_factura(file_path, tipodoc):
 
     campostipodoc = buscar_tipodoc(tipodoc)
 
-    # URL de la API
-    url = "https://api.camtomx.com/api/v3/camtomdocs/extract?country_code=COL&json_schema=True"
-
-    # Encabezados
-    headers = {
-        "accept": "application/json",
-        "Authorization": "Bearer sk_6345e9288e81f89290ac68a279f6e22c1804fb74f7c5758f8b3a0235f6af61e2",  # Reemplaza con tu token real
-    }
+    integraia_base_url = os.getenv("INTEGRALAIA_BASE_URL")
+    integraia_api_key = os.getenv("INTEGRALAIA_API_KEY")
 
     if campostipodoc:
         # JSON como string
@@ -693,49 +738,55 @@ El documento es una Factura Comercial Internacional de comercio exterior. Contie
 
     print(json_data)
 
-    # Enviar archivo y JSON a la API
-    files = {
-        "file_path": open(file_path, "rb"),
-        "json_data": (None, json.dumps(json_data)),
+    valid_config, validation_message = validate_integralaia_settings()
+    if not valid_config:
+        return SimpleResponse(
+            status_code=500,
+            payload={"detail": validation_message},
+        )
+
+    document_type_code = _map_tipodoc_to_document_type_code(tipodoc)
+    provider = IntegralaiaProvider(
+        base_url=integraia_base_url.rstrip("/"),
+        api_key=integraia_api_key,
+        timeout=int(os.getenv("INTEGRALAIA_TIMEOUT", "60")),
+        extraction_timeout=int(os.getenv("INTEGRALAIA_EXTRACTION_TIMEOUT", "180")),
+    )
+
+    operation_payload = {
+        "doc_impoid": Path(file_path).stem,
+        "do_number": Path(file_path).stem,
+        "operation_date": datetime.utcnow().date().isoformat(),
+        "details": {
+            "source": "tracking-api",
+            "tipodoc": str(tipodoc),
+        },
     }
 
- 
-
-    response = requests.post(url, headers=headers, files=files)
-
-    if response.status_code == 200:
-        print("✅ Extracción exitosa")
-        hoja_nombre = os.path.basename(file_path)
-
-        response_json = response.json()
-        print(response_json)
-
-        # OJO: según la API, a veces viene en "document_data"
-        doc = response_json.get("document_data", {})
-
-        # ✅ Normaliza fechas específicas en la respuesta (DENTRO del if)
-        # Factura
-        if isinstance(doc, dict) and "factura" in doc and isinstance(doc["factura"], dict):
-            doc["factura"]["invoiceDate"] = normalizar_fecha(doc["factura"].get("invoiceDate", ""))
-
-        # Purchase order
-        if isinstance(doc, dict) and "purchase_order" in doc and isinstance(doc["purchase_order"], dict):
-            doc["purchase_order"]["date_po"] = normalizar_fecha(doc["purchase_order"].get("date_po", ""))
-
-        # Discharge
-        if isinstance(doc, dict) and "discharge" in doc and isinstance(doc["discharge"], dict):
-            doc["discharge"]["date"] = normalizar_fecha(doc["discharge"].get("date", ""))
-
-        # Si quieres guardar en excel lo normalizado, guarda doc o response_json
-        # response_json["document_data"] = doc
-        # guardar_en_excel(response_json, hoja_nombre)
-
-        return response
-
-    else:
-        print("❌ Error:", response.status_code)
-        print(response.text)
-        return response
+    try:
+        operation = provider.create_operation(operation_payload)
+        extraction = provider.extract_sync_from_file(
+            operation_id=operation["id"],
+            file_path=file_path,
+            document_type_code=document_type_code,
+        )
+        payload = {
+            "document_data": extraction.get("extracted_data", {}),
+            "integration": "integralaia",
+            "operation": operation,
+            "extraction": extraction,
+        }
+        return SimpleResponse(status_code=200, payload=payload)
+    except ExtractionSchemaNotConfigured as exc:
+        return SimpleResponse(
+            status_code=422,
+            payload={"detail": {"message": exc.message, "document_type_code": exc.document_type_code}},
+        )
+    except Exception as exc:
+        return SimpleResponse(
+            status_code=500,
+            payload={"detail": f"Error en extracción con Integralaia: {str(exc)}"},
+        )
 
 
 """
