@@ -1,0 +1,20 @@
+- FACTURACOMERCIAL-56252443.pdf
+	- ítems sin product code
+	- Algunos items_unit vienen nulos cuando en la factura está y en otros ítems extrajo este elemento bien.
+
+- FACTURACOMERCIAL-FACTURA-7441NA66473481.pdf
+	- No extrajo la descripción a pesar que es una descripción extensa.
+
+- FACTURACOMERCIAL-7411PA63196889.pdf
+	- No extrajo el código del producto.
+
+- FACTURACOMERCIAL-7411RT56666366.pdf
+	- No extrajo correctamente la descripción del producto, al parecer en ese campo extrajo lo que sería el código de producto, mientras que en el campo código de producto no registró nada.
+	-No extrajo la unidad del producto.
+
+- FACTURACOMERCIAL-A24101.pdf
+	- Extrajo un ítem de más, no sabemos por qué.
+
+- FACTURACOMERCIAL-9007136.pdf
+	- Campo product code erróneo totalmente.
+	- Campo quantity con la unidad y el campo unidad como nulo.

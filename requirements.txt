@@ -1,0 +1,8 @@
+requests
+pyodbc
+dateparser
+pandas
+msal
+numpy
+pydantic
+fastapi
