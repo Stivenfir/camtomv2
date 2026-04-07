@@ -32,7 +32,7 @@ from io import BytesIO
 from decimal import Decimal, ROUND_HALF_UP
 from jsonaxlsx import process_job_with_jobid
 from xlsxprocesotiempos import xlsx_process, endpointminimas, fichatecnica_pdf
-from extractgeneral import ocr_factura
+from extractgeneral import ocr_factura, validate_integralaia_settings
 
 # Configuración básica del logging
 logging.basicConfig(
@@ -42,6 +42,13 @@ logging.basicConfig(
 )
 
 app = FastAPI()
+
+
+@app.on_event("startup")
+def validate_integralaia_on_startup():
+    valid_config, validation_message = validate_integralaia_settings()
+    if not valid_config:
+        raise RuntimeError(validation_message)
 
 # obtener_clasificacion_arancelaria("carro automatico motor 1.6 de color rojo")
 
@@ -156,7 +163,12 @@ def insertar_datafactura(data_factura, IAPR_ProcesarFacturaID, clienteid):
             cursor.execute("EXEC SP_RemoverPuntoFechaFactura ?", inserted_id)
 
         except Exception as e:
-            print(f"error al insertar datos: {e}")
+            logging.error(f"error al insertar datos de factura IAPR_ProcesarFacturaID={IAPR_ProcesarFacturaID}: {e}")
+            logging.debug(traceback.format_exc())
+            conn.rollback()
+            cursor.close()
+            conn.close()
+            return 0
 
         # Confirmar los cambios en la base de datos
         conn.commit()
@@ -1145,6 +1157,8 @@ def procesar_factura_background(docimpoid: str): #docimpoid
 
                             if data_factura and items_factura: # añadir validacion de facturaid unico por cliente 
                                 IAFAC_FacturaID = insertar_datafactura(data_factura, estado_factura[0], estado_factura[5])
+                                if not IAFAC_FacturaID:
+                                    raise ValueError("No se logró insertar el encabezado de factura en IA_IM_Factura.")
                                 insertar_itemsfactura(IAFAC_FacturaID, items_factura)
 
                                 estado_procesado(IAPR_ProcesarFacturaID, 1)

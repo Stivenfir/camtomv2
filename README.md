@@ -1,6 +1,19 @@
 ## Ejecucion del servidor:
     python -m uvicorn consolidado:app --host 0.0.0.0 --port 8000
 
+## Variables de entorno requeridas (Integralaia)
+
+Este servicio ahora usa únicamente Integralaia para extracción de facturas.
+Antes de iniciar, define:
+
+- `INTEGRALAIA_BASE_URL`
+- `INTEGRALAIA_API_KEY`
+
+Opcionales:
+
+- `INTEGRALAIA_TIMEOUT` (default `60`)
+- `INTEGRALAIA_EXTRACTION_TIMEOUT` (default `180`)
+
 
 -----------------------------------------------------------------------
 
