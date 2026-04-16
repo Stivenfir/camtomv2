@@ -13,6 +13,7 @@ import json
 import traceback
 import logging
 import threading
+from uuid import uuid4
 
 from time import sleep
 from pydantic import BaseModel
@@ -32,7 +33,7 @@ from io import BytesIO
 from decimal import Decimal, ROUND_HALF_UP
 from jsonaxlsx import process_job_with_jobid
 from xlsxprocesotiempos import xlsx_process, endpointminimas, fichatecnica_pdf
-from extractgeneral import ocr_factura
+from extractgeneral import ocr_factura, validate_integralaia_settings
 
 # Configuración básica del logging
 logging.basicConfig(
@@ -42,6 +43,22 @@ logging.basicConfig(
 )
 
 app = FastAPI()
+PROCESSING_STATUS: dict[str, dict] = {}
+PROCESSING_STATUS_LOCK = threading.Lock()
+
+
+@app.on_event("startup")
+def validate_integralaia_on_startup():
+    valid_config, validation_message = validate_integralaia_settings()
+    if not valid_config:
+        raise RuntimeError(validation_message)
+
+
+@app.on_event("startup")
+def validate_integralaia_on_startup():
+    valid_config, validation_message = validate_integralaia_settings()
+    if not valid_config:
+        raise RuntimeError(validation_message)
 
 # obtener_clasificacion_arancelaria("carro automatico motor 1.6 de color rojo")
 
@@ -156,7 +173,12 @@ def insertar_datafactura(data_factura, IAPR_ProcesarFacturaID, clienteid):
             cursor.execute("EXEC SP_RemoverPuntoFechaFactura ?", inserted_id)
 
         except Exception as e:
-            print(f"error al insertar datos: {e}")
+            logging.error(f"error al insertar datos de factura IAPR_ProcesarFacturaID={IAPR_ProcesarFacturaID}: {e}")
+            logging.debug(traceback.format_exc())
+            conn.rollback()
+            cursor.close()
+            conn.close()
+            return 0
 
         # Confirmar los cambios en la base de datos
         conn.commit()
@@ -1062,28 +1084,78 @@ def procesar_fichatecnica_background(docimpoid: str):
             cursor.close()
             conn.close()
 
-
+            for ruta_path in archivos_path:
+                RutaFichaTecnica = ruta_path[0]
+                logging.debug(f"Ruta modificada del archivo: {RutaFichaTecnica}")
+                print(RutaFichaTecnica)
 
     except Exception as e:
         logging.error(f"Error en el procesamiento de ficha técnica en segundo plano para docimpoid: {docimpoid} - {e}")
 
-@app.get("/procesarfactura/{docimpoid:path}") #docimpoid
-async def main(docimpoid: str):
+@app.get("/checkfactura/{docimpoid:path}") #docimpoid
+@app.get("/procesarfactura/{docimpoid:path}", include_in_schema=False)
+async def procesar_factura_endpoint(docimpoid: str):
     if not docimpoid:
         return {"error": "DocImpoID no puede estar vacío"}
 
+    request_id = str(uuid4())
+    with PROCESSING_STATUS_LOCK:
+        PROCESSING_STATUS[request_id] = {
+            "request_id": request_id,
+            "docimpoid": docimpoid,
+            "status": "processing",
+            "message": "Proceso iniciado",
+            "started_at": datetime.now().isoformat(),
+            "finished_at": None,
+            "total_facturas": 0,
+            "procesadas_ok": 0,
+            "procesadas_error": 0,
+            "saltadas": 0,
+            "items": [],
+        }
+
     # Lanzamos un hilo directamente
-    thread = threading.Thread(target=procesar_factura_background, args=(docimpoid,))
+    thread = threading.Thread(target=procesar_factura_background, args=(docimpoid, request_id))
     thread.start()
 
-    return {"status": "processing", "docimpoid": docimpoid}
+    return {
+        "status": "processing",
+        "docimpoid": docimpoid,
+        "request_id": request_id,
+        "status_endpoint": f"/checkfactura-estado/{request_id}",
+    }
 
-def procesar_factura_background(docimpoid: str): #docimpoid
+
+@app.get("/checkfactura-estado/{request_id}")
+@app.get("/procesarfactura-estado/{request_id}", include_in_schema=False)
+async def obtener_estado_procesamiento(request_id: str):
+    with PROCESSING_STATUS_LOCK:
+        estado = PROCESSING_STATUS.get(request_id)
+    if not estado:
+        return {"error": "request_id no encontrado"}
+    return estado
+
+
+def _status_update(request_id: str, **kwargs):
+    with PROCESSING_STATUS_LOCK:
+        if request_id in PROCESSING_STATUS:
+            PROCESSING_STATUS[request_id].update(kwargs)
+
+
+def _status_add_item(request_id: str, item: dict):
+    with PROCESSING_STATUS_LOCK:
+        if request_id in PROCESSING_STATUS:
+            PROCESSING_STATUS[request_id]["items"].append(item)
+
+
+def procesar_factura_background(docimpoid: str, request_id: str): #docimpoid
     try:
         logging.info(f"Iniciando procesamiento de factura en segundo plano para docimpoid: {docimpoid}")
         conn = conectar_sql_server()
         archivos_path = None
         countfacturasnoprocesadas = 0
+        countfacturasok = 0
+        countsaltadas = 0
 
         # Validar y convertir docimpoid
         try:
@@ -1110,6 +1182,7 @@ def procesar_factura_background(docimpoid: str): #docimpoid
 
             archivos_path = cursor.fetchall()
             logging.info(f"{len(archivos_path)} factura(s) encontrada(s) para procesar. Detalles: {archivos_path}")
+            _status_update(request_id, total_facturas=len(archivos_path), message=f"{len(archivos_path)} facturas encontradas")
             conn.commit()
 
             cursor.close()
@@ -1121,16 +1194,25 @@ def procesar_factura_background(docimpoid: str): #docimpoid
                 facturas_sin_iniciar = buscarIAPR_ProcesarFacturaID_sininiciar(IAPR_ProcesarFacturaID)
                 if facturas_sin_iniciar == True:
                     logging.debug(f"RESULTADO BUSQUEDA DE FACTURAS ID SIN INICIAR: {facturas_sin_iniciar}")
+                    countsaltadas += 1
+                    _status_add_item(
+                        request_id,
+                        {
+                            "IAPR_ProcesarFacturaID": IAPR_ProcesarFacturaID,
+                            "ruta": ruta_path[0],
+                            "estado": "skipped",
+                            "mensaje": "Factura ya iniciada previamente (FechaInicioProcesamiento no nula)",
+                        },
+                    )
                     continue
                 else:
-                    print(ruta_path[0])
+                    ruta_path = ruta_path[0]
                     logging.debug(f"Ruta modificada del archivo: {ruta_path}")
 
                     estado_factura = estado_procesado(IAPR_ProcesarFacturaID, 0)
                     logging.debug(f"Estado de factura recuperado: {estado_factura}")
 
-                    ruta_archivo = ruta_path[0]          # ✅ ahora sí es string
-                    extension_archivo = verificar_tipo_doc(ruta_archivo)
+                    extension_archivo = verificar_tipo_doc(ruta_path)
                     logging.debug(f"Extensión del archivo: {extension_archivo}")
 
                     if extension_archivo.lower() == 'pdf' and estado_factura[3] == 0:
@@ -1138,16 +1220,29 @@ def procesar_factura_background(docimpoid: str): #docimpoid
                             logging.info(f"Procesando archivo PDF: {ruta_path}")
                             fecha_inicio_procesamiento = datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]
                             informacioninicioprocesamiento(IAPR_ProcesarFacturaID, fecha_inicio_procesamiento)
-                            data_factura, items_factura = procesar_factura(ruta_archivo, estado_factura[5], tipodoc)
+                            data_factura, items_factura = procesar_factura(ruta_path, estado_factura[5], tipodoc)
                             logging.info(f"Datos extraídos: {data_factura}, {len(items_factura) if items_factura else 0} ítem(s)")
 
                             if data_factura and items_factura: # añadir validacion de facturaid unico por cliente 
                                 IAFAC_FacturaID = insertar_datafactura(data_factura, estado_factura[0], estado_factura[5])
+                                if not IAFAC_FacturaID:
+                                    raise ValueError("No se logró insertar el encabezado de factura en IA_IM_Factura.")
                                 insertar_itemsfactura(IAFAC_FacturaID, items_factura)
 
                                 estado_procesado(IAPR_ProcesarFacturaID, 1)
                                 estado_procesamientoia(0, IAFAC_FacturaID)
                                 validaprocesamientoia(IAPR_ProcesarFacturaID, 0, '')
+                                countfacturasok += 1
+                                _status_add_item(
+                                    request_id,
+                                    {
+                                        "IAPR_ProcesarFacturaID": IAPR_ProcesarFacturaID,
+                                        "ruta": ruta_path,
+                                        "estado": "ok",
+                                        "IAFAC_FacturaID": IAFAC_FacturaID,
+                                        "mensaje": "Factura insertada correctamente",
+                                    },
+                                )
 
                                 logging.info(f"Factura procesada exitosamente. IAPR_ProcesarFacturaID={IAPR_ProcesarFacturaID}")
                             else:
@@ -1159,12 +1254,31 @@ def procesar_factura_background(docimpoid: str): #docimpoid
                             validaprocesamientoia(IAPR_ProcesarFacturaID, 1, f'Error al insertar la información: {str(e)}')
                             estado_procesado(IAPR_ProcesarFacturaID, 1)
                             countfacturasnoprocesadas += 1
+                            _status_add_item(
+                                request_id,
+                                {
+                                    "IAPR_ProcesarFacturaID": IAPR_ProcesarFacturaID,
+                                    "ruta": ruta_path,
+                                    "estado": "error",
+                                    "mensaje": str(e),
+                                },
+                            )
 
                         fecha_final_procesamiento = datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]
                         informacionfinalizacionprocesamiento(IAPR_ProcesarFacturaID, fecha_final_procesamiento)
                     else:
                         logging.warning(f"Omitiendo archivo: formato no válido o ya procesado. IAPR_ProcesarFacturaID={IAPR_ProcesarFacturaID} - {traceback.format_exc()}")
                         estado_procesado(IAPR_ProcesarFacturaID, 1)
+                        countsaltadas += 1
+                        _status_add_item(
+                            request_id,
+                            {
+                                "IAPR_ProcesarFacturaID": IAPR_ProcesarFacturaID,
+                                "ruta": ruta_path,
+                                "estado": "skipped",
+                                "mensaje": "Formato no válido o ya procesado",
+                            },
+                        )
             
             # Acciones según número de facturas no procesadas
             if countfacturasnoprocesadas == len(archivos_path):
@@ -1190,11 +1304,26 @@ def procesar_factura_background(docimpoid: str): #docimpoid
             logging.info(f":::::::::::::::::::::::::::::::::::::::::::::::::::")
             print(f"Finalizó procesamiento para docimpoid {docimpoid}")
             print(f":::::::::::::::::::::::::::::::::::::::::::::::::::")
+            _status_update(
+                request_id,
+                status="completed",
+                message="Procesamiento finalizado",
+                finished_at=datetime.now().isoformat(),
+                procesadas_ok=countfacturasok,
+                procesadas_error=countfacturasnoprocesadas,
+                saltadas=countsaltadas,
+            )
 
     except Exception as e:
         logging.critical(f"Error fatal durante el procesamiento de docimpoid {docimpoid}: {e}")
         logging.debug(traceback.format_exc())
         logging.error(":::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::")
+        _status_update(
+            request_id,
+            status="error",
+            message=str(e),
+            finished_at=datetime.now().isoformat(),
+        )
     
 @app.get("/procesoclasificacion/{docimpoid:path}")
 async def procesoclasificacion(docimpoid: str, background_tasks: BackgroundTasks):
@@ -1306,7 +1435,8 @@ async def procesoclasificacion_background(docimpoid: str):
                         ficha_path = ficha_row[0] if ficha_row else None
                         logging.info(f"FICHA TECNICA para item {IAItemFAC_ItemFacID}: {ficha_path}")
 
-
+                        if ficha_path:
+                            RutaFichaTecnica = ficha_path.replace('1.7', '10.39')
 
                         #########################################################################################################
 
